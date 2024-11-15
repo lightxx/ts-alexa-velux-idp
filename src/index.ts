@@ -73,61 +73,95 @@ const handleAuthorize = async (params: APIGatewayProxyEventQueryStringParameters
 
 const handleTokenExchange = async (body: string | undefined | null): Promise<APIGatewayProxyResult> => {
     if (!body) {
-      return {
-        statusCode: 400,
-        body: JSON.stringify({ error: "Missing request body" }),
-      };
+        return {
+            statusCode: 400,
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ error: "Missing request body" }),
+        };
     }
-  
-    const parsedBody = JSON.parse(body);
-    const { code, client_id, client_secret, redirect_uri } = parsedBody;
-  
-    // Validate the authorization code
+
+    const decodedBody = Buffer.from(body, 'base64').toString('utf-8');
+
+    console.log("Decoded Body: " + decodedBody);
+
+    const params = new URLSearchParams(decodedBody);
+    const code = params.get("code");
+    const client_id = params.get("client_id");
+    const redirect_uri = params.get("redirect_uri");
+    const grant_type = params.get("grant_type");
+
+    if (!code || !client_id || !redirect_uri || !grant_type) {
+        console.error("Missing required parameters");
+        return {
+            statusCode: 400,
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ error: "Missing required parameters" }),
+        };
+    }
+
+    if (grant_type !== "authorization_code") {
+        console.error("Invalid grant type");
+        return {
+            statusCode: 400,
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ error: "Invalid grant type" }),
+        };
+    }
+
     const result = await dynamoDB.get({
-      TableName: AUTH_TABLE,
-      Key: { code },
+        TableName: AUTH_TABLE,
+        Key: { code },
     }).promise();
-  
+
     if (
-      !result.Item ||
-      result.Item.clientId !== client_id ||
-      result.Item.redirectUri !== redirect_uri ||
-      result.Item.expiresAt < Date.now()
+        !result.Item ||  result.Item.expiresAt < Date.now()
     ) {
-      return {
-        statusCode: 400,
-        body: JSON.stringify({ error: "Invalid or expired authorization code" }),
-      };
+        console.error("Invalid or expired authorization code");
+        return {
+            statusCode: 400,
+            headers: {
+                "Content-Type": "application/json"
+            },
+            body: JSON.stringify({ error: "Invalid or expired authorization code" }),
+        };
     }
-  
-    // Retrieve the Velux User ID associated with the authorization code
+
     const veluxUserId = result.Item.veluxUserId;
-  
-    // Generate an access token
+
+    // Generate a new access token
     const accessToken = uuidv4();
-  
-    // Store the access token along with the Velux User ID
+
+    // Store the access token
     await dynamoDB.put({
-      TableName: TOKEN_TABLE,
-      Item: {
-        token: accessToken,
-        clientId: client_id,
-        veluxUserId: veluxUserId, // Store the Velux User ID with the token
-        createdAt: Date.now(),
-        expiresAt: Date.now() + 60 * 60 * 1000, // 1 hour from now
-      },
+        TableName: TOKEN_TABLE,
+        Item: {
+            token: accessToken,
+            clientId: client_id,
+            veluxUserId: veluxUserId,
+            createdAt: Date.now(),
+            expiresAt: Date.now() + 60 * 60 * 1000, // 1 hour expiry
+        },
     }).promise();
-  
+
     // Return the access token
     return {
-      statusCode: 200,
-      body: JSON.stringify({
-        access_token: accessToken,
-        token_type: "bearer",
-        expires_in: 3600,
-      }),
+        statusCode: 200,
+        headers: {
+            "Content-Type": "application/json"
+        },
+        body: JSON.stringify({
+            access_token: accessToken,
+            token_type: "bearer",
+            expires_in: 3600, // 1 hour in seconds
+        }),
     };
-  };
+};
   
 
 // Register Velux User handler
@@ -140,9 +174,9 @@ const handleRegisterUser = async (body: string | undefined | null): Promise<APIG
     }
   
     const parsedBody = JSON.parse(body);
-    const { velux_user_id, velux_password, client_id, redirect_uri, state } = parsedBody;
+    const { velux_user_id, velux_password } = parsedBody;
   
-    if (!velux_user_id || !velux_password || !client_id || !redirect_uri) {
+    if (!velux_user_id || !velux_password) {
       return {
         statusCode: 400,
         body: JSON.stringify({ error: "Missing required parameters" }),
@@ -161,40 +195,39 @@ const handleRegisterUser = async (body: string | undefined | null): Promise<APIG
           body: JSON.stringify({ error: "Error validating credentials against Velux backend!" }),
         };
       }
-
-    // Store the Velux User ID and password in DynamoDB
+      
     await dynamoDB.put({
       TableName: USER_TABLE,
       Item: {
         userid: velux_user_id,
-        password: velux_password, // In a real implementation, make sure to hash/encrypt this password
+        password: velux_password, 
         createdAt: Date.now(),
       },
     }).promise();
   
-    // Generate an authorization code
     const authCode = uuidv4();
   
-    // Store the authorization code and link it with the Velux User ID
     await dynamoDB.put({
       TableName: AUTH_TABLE,
       Item: {
         code: authCode,
-        clientId: client_id,
         veluxUserId: velux_user_id,
-        redirectUri: redirect_uri,
         expiresAt: Date.now() + 10 * 60 * 1000, // expires in 10 minutes
       },
     }).promise();
   
-    // Redirect to the redirect_uri with the auth code
-    const redirectLocation = `${redirect_uri}?code=${authCode}&state=${state || ""}`;
+    const homeInfoJSON = await shared.getHomeInfo();
+
+    const homeData = homeInfoJSON.data;
+
     return {
-      statusCode: 302,
-      headers: {
-        Location: redirectLocation,
-      },
-      body: "",
-    };
+        statusCode: 200, 
+        body: JSON.stringify({
+          message: {
+            code: authCode
+          },          
+          homeInfo: homeData
+        }),
+      };
   };
   
