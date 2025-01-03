@@ -3,7 +3,6 @@ import AWS from "aws-sdk";
 const AUTH_TABLE = "OAuthAuthorizationCodes";
 const TOKEN_TABLE = "OAuthAccessTokens";
 
-// Store Authorization Code
 export const storeAuthorizationCode = async (
   dynamoDB: AWS.DynamoDB.DocumentClient,
   code: string,
@@ -23,7 +22,6 @@ export const storeAuthorizationCode = async (
   await dynamoDB.put(params).promise();
 };
 
-// Validate Authorization Code
 export const validateAuthorizationCode = async (
   dynamoDB: AWS.DynamoDB.DocumentClient,
   code: string,
